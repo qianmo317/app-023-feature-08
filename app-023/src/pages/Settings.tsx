@@ -1,15 +1,80 @@
 // 设置 /settings —— 乐器音色参数与键盘映射
 import { useEffect, useState } from 'react';
 import type { AppSettings, Instrument } from '../types';
-import { DEFAULT_INSTRUMENTS } from '../lib/factory';
-import { saveSettings } from '../lib/storage';
 import { useSettings } from '../settingsContext';
+import { currentInstruments, isCustomized, parseSynthInput, synthLimit } from '../lib/synth';
+import { saveSettings } from '../lib/storage';
+
+/** 单个音色输入：本地草稿 + 就地校验；非法只提示不写入，失焦回退到已存值 */
+function SynthCell({
+  inst,
+  field,
+  value,
+  step,
+  onCommit,
+}: {
+  inst: Instrument;
+  field: 'baseHz' | 'decay';
+  value: number;
+  step: number;
+  onCommit: (v: number) => void;
+}) {
+  const limit = synthLimit(inst, field);
+  const [draft, setDraft] = useState(String(value));
+  const [error, setError] = useState('');
+  const [focused, setFocused] = useState(false);
+
+  // 外部值变化（恢复出厂、全部恢复）时同步；正在编辑不打断输入
+  useEffect(() => {
+    if (!focused) setDraft(String(value));
+    // 错误信息在输入时即时维护，这里不覆盖（避免焦点未更新时清错）
+  }, [value, focused]);
+
+  const onChange = (raw: string) => {
+    setDraft(raw);
+    const r = parseSynthInput(raw, limit, field);
+    setError(r.ok ? '' : r.error);
+    if (r.ok) onCommit(r.value); // 合法值立即写入设置并落盘；非法只提示
+  };
+
+  return (
+    <div className="synth-cell">
+      <input
+        type="text"
+        inputMode="decimal"
+        className={error ? 'synth-input invalid' : 'synth-input'}
+        data-testid={`${field}-${inst.id}`}
+        aria-invalid={error ? true : undefined}
+        value={draft}
+        step={step}
+        title={`允许范围 ${limit.min}–${limit.max} ${field === 'baseHz' ? 'Hz' : 's'}`}
+        onChange={(e) => onChange(e.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => {
+          setFocused(false);
+          if (error) {
+            // 失焦时若仍非法，就地回退到最近一次已存值（先清错，避免 effect 用过期焦点态）
+            setError('');
+            setDraft(String(value));
+          }
+        }}
+      />
+      {error && (
+        <span className="synth-error" data-testid={`${field}-${inst.id}-error`}>
+          {error}
+        </span>
+      )}
+    </div>
+  );
+}
 
 export function Settings() {
-  const { s, replaceSettings, setShowHighlight, setStretch } = useSettings();
+  const { s, replaceSettings, setShowHighlight, setStretch, setSynthValue, resetSynth, resetAllSynth } = useSettings();
   const [waiting, setWaiting] = useState<string | null>(null); // 等待按键的 binding key
-  const [instruments, setInstruments] = useState<Instrument[]>(DEFAULT_INSTRUMENTS);
   const [msg, setMsg] = useState('');
+
+  const instruments = currentInstruments(s.synthOverrides);
+  const customCount = instruments.filter((i) => isCustomized(i.id, s.synthOverrides)).length;
 
   const rebind = (e: KeyboardEvent) => {
     e.preventDefault();
@@ -38,12 +103,6 @@ export function Settings() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [waiting, s]);
-
-  const patchSynth = (id: string, field: 'baseHz' | 'decay', value: number) => {
-    setInstruments((list) =>
-      list.map((i) => (i.id === id ? { ...i, synth: { ...i.synth, [field]: value } } : i)),
-    );
-  };
 
   return (
     <div className="page" data-testid="settings-page">
@@ -102,7 +161,9 @@ export function Settings() {
       {msg && <p className="dim" data-testid="rebind-msg">{msg}</p>}
 
       <h2>乐器音色（合成参数）</h2>
-      <p className="dim">改动仅对当前浏览器生效并用于新曲；如需存入曲目请在编辑器中使用。</p>
+      <p className="dim">
+        改动即时存入本浏览器并用于之后新建/载入的曲目；已存在的曲目需在编辑器里点「套用当前音色」才会更新。
+      </p>
       <table className="list" data-testid="synth-table">
         <thead>
           <tr>
@@ -111,37 +172,72 @@ export function Settings() {
             <th>基频 Hz</th>
             <th>衰减 s</th>
             <th>噪声</th>
+            <th className="synth-actions-col">
+              出厂值
+              <button
+                className="mini"
+                data-testid="reset-all-synth"
+                disabled={customCount === 0}
+                onClick={() => {
+                  resetAllSynth();
+                  setMsg('全部乐器音色已恢复出厂值');
+                }}
+              >
+                全部恢复
+              </button>
+            </th>
           </tr>
         </thead>
         <tbody>
-          {instruments.map((inst) => (
-            <tr key={inst.id}>
-              <td style={{ color: inst.color, fontWeight: 700 }}>{inst.name}</td>
-              <td>{inst.synth.type}</td>
-              <td>
-                <input
-                  type="number"
-                  data-testid={`hz-${inst.id}`}
-                  value={inst.synth.baseHz}
-                  min={40}
-                  max={2400}
-                  onChange={(e) => patchSynth(inst.id, 'baseHz', Number(e.target.value))}
-                />
-              </td>
-              <td>
-                <input
-                  type="number"
-                  data-testid={`decay-${inst.id}`}
-                  value={inst.synth.decay}
-                  min={0.03}
-                  max={3}
-                  step={0.01}
-                  onChange={(e) => patchSynth(inst.id, 'decay', Number(e.target.value))}
-                />
-              </td>
-              <td>{inst.synth.noise ? '有' : '无'}</td>
-            </tr>
-          ))}
+          {instruments.map((inst) => {
+            const customized = isCustomized(inst.id, s.synthOverrides);
+            return (
+              <tr key={inst.id} data-testid={`synth-row-${inst.id}`}>
+                <td style={{ color: inst.color, fontWeight: 700 }}>
+                  {inst.name}
+                  {customized && (
+                    <span className="custom-badge" data-testid={`custom-${inst.id}`} title="已偏离出厂值">
+                      自定义
+                    </span>
+                  )}
+                </td>
+                <td>{inst.synth.type}</td>
+                <td>
+                  <SynthCell
+                    inst={inst}
+                    field="baseHz"
+                    value={inst.synth.baseHz}
+                    step={1}
+                    onCommit={(v) => setSynthValue(inst.id, 'baseHz', v)}
+                  />
+                </td>
+                <td>
+                  <SynthCell
+                    inst={inst}
+                    field="decay"
+                    value={inst.synth.decay}
+                    step={0.01}
+                    onCommit={(v) => setSynthValue(inst.id, 'decay', v)}
+                  />
+                </td>
+                <td>{inst.synth.noise ? '有' : '无'}</td>
+                <td>
+                  <button
+                    className="mini danger"
+                    data-testid={`reset-synth-${inst.id}`}
+                    disabled={!customized}
+                    title="把这件乐器的基频与衰减恢复成出厂值"
+                    onClick={() => {
+                      resetSynth(inst.id);
+                      setMsg(`「${inst.name}」音色已恢复出厂值`);
+                    }}
+                  >
+                    恢复
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

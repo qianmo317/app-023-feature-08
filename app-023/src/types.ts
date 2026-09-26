@@ -59,11 +59,15 @@ export interface KeyBinding {
   glyphIndex: number;
 }
 
+/** 用户改过的合成参数：乐器 id → 改过的字段（只存基频/衰减，未改的乐器不出现） */
+export type SynthOverrides = Record<string, Partial<Pick<Synth, 'baseHz' | 'decay'>>>;
+
 export interface AppSettings {
   keyMap: KeyBinding[];
   durationKeys: Record<string, number>; // 数字键 → 格数
   showHighlight: boolean; // 试听时当前拍高亮（可关闭）
   currentBeatStretch: number; // 散板近似播放伸缩系数
+  synthOverrides: SynthOverrides; // 乐器音色（基频/衰减）的用户改动；新曲默认携带
 }
 
 /** 一个待调度的事件（音频/视觉共用） */

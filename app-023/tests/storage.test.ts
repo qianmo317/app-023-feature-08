@@ -60,4 +60,22 @@ describe('设置持久化', () => {
     expect(got!.keyMap.length).toBeGreaterThan(0);
     expect(got!.durationKeys['1']).toBe(4);
   });
+
+  it('音色覆盖（基频/衰减）保存后原样读回，刷新不丢', async () => {
+    const s = defaultSettings();
+    s.synthOverrides = { gu: { baseHz: 150, decay: 0.66 }, daluo: { baseHz: 300 } };
+    await saveSettings(s);
+    const got = await loadSettings();
+    expect(got!.synthOverrides).toEqual({ gu: { baseHz: 150, decay: 0.66 }, daluo: { baseHz: 300 } });
+  });
+
+  it('恢复出厂（清空覆盖）后读回为空对象', async () => {
+    const s = defaultSettings();
+    s.synthOverrides = { gu: { baseHz: 150 } };
+    await saveSettings(s);
+    s.synthOverrides = {};
+    await saveSettings(s);
+    const got = await loadSettings();
+    expect(got!.synthOverrides).toEqual({});
+  });
 });

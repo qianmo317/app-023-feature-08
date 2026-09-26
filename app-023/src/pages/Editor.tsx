@@ -7,6 +7,7 @@ import { barTicks, setStepAt, stepAtOffset } from '../lib/grid';
 import { resolveKey, TECH_NAMES } from '../lib/glyphs';
 import { emptyBar } from '../lib/factory';
 import { getScore, saveScore } from '../lib/storage';
+import { applyCurrentSynth, synthDiffers } from '../lib/synth';
 import { useAudio } from '../hooks/useAudio';
 import { ScoreGrid, type Selection } from '../components/ScoreGrid';
 import { Transport } from '../components/Transport';
@@ -295,6 +296,24 @@ export function Editor({ scoreId, onNavigate }: Props) {
     patch((s) => (s.bars.length <= 1 ? s : { ...s, bars: s.bars.slice(0, -1) }));
   }, [patch]);
 
+  /** 把设置页当前音色套用到本曲某件乐器（其余乐器保留各自快照）；套用后由自动保存落盘 */
+  const applySynthOne = useCallback(
+    (instId: string) => {
+      patch((s) => applyCurrentSynth(s, settings.synthOverrides, [instId]));
+    },
+    [patch, settings.synthOverrides],
+  );
+
+  /** 把当前音色套用到本曲全部乐器 */
+  const applySynthAll = useCallback(() => {
+    patch((s) => applyCurrentSynth(s, settings.synthOverrides));
+  }, [patch, settings.synthOverrides]);
+
+  const differsCount = useMemo(
+    () => (score ? score.instruments.filter((i) => synthDiffers(i, settings.synthOverrides)).length : 0),
+    [score, settings.synthOverrides],
+  );
+
   const durationLabel = useMemo(
     () => DURATIONS.find((d) => d.ticks === duration)?.name ?? `${duration} 格`,
     [duration],
@@ -349,8 +368,21 @@ export function Editor({ scoreId, onNavigate }: Props) {
 
       <div className="editor-body">
         <aside className="inst-panel" data-testid="inst-panel">
-          <h3>乐器</h3>
-          {score.instruments.map((inst) => (
+          <h3>
+            乐器
+            <button
+              className="btn-sm synth-apply-all"
+              data-testid="apply-synth-all"
+              disabled={differsCount === 0}
+              title="把设置页当前的基频/衰减套用到本曲全部乐器；不套则保留曲目自己的音色"
+              onClick={applySynthAll}
+            >
+              全部套用音色
+            </button>
+          </h3>
+          {score.instruments.map((inst) => {
+            const differs = synthDiffers(inst, settings.synthOverrides);
+            return (
             <div
               key={inst.id}
               className={`inst-row ${instId === inst.id ? 'sel' : ''}`}
@@ -367,36 +399,54 @@ export function Editor({ scoreId, onNavigate }: Props) {
                   </span>
                 ))}
               </span>
-              <button
-                className={`mini ${audio.soloMute.solo.has(inst.id) ? 'on' : ''}`}
-                data-testid={`solo-${inst.id}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  audio.toggleSolo(inst.id);
-                }}
-                title="独奏"
-              >
-                独
-              </button>
-              <button
-                className={`mini ${audio.soloMute.muted.has(inst.id) ? 'on' : ''}`}
-                data-testid={`mute-${inst.id}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  audio.toggleMute(inst.id);
-                }}
-                title="静音"
-              >
-                默
-              </button>
+              <span className="inst-actions">
+                <button
+                  className={`mini ${differs ? 'synth-apply' : ''}`}
+                  data-testid={`apply-synth-${inst.id}`}
+                  disabled={!differs}
+                  title="套用设置页当前的基频/衰减到本曲这件乐器（保留则不动）"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    applySynthOne(inst.id);
+                  }}
+                >
+                  套
+                </button>
+                <button
+                  className={`mini ${audio.soloMute.solo.has(inst.id) ? 'on' : ''}`}
+                  data-testid={`solo-${inst.id}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    audio.toggleSolo(inst.id);
+                  }}
+                  title="独奏"
+                >
+                  独
+                </button>
+                <button
+                  className={`mini ${audio.soloMute.muted.has(inst.id) ? 'on' : ''}`}
+                  data-testid={`mute-${inst.id}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    audio.toggleMute(inst.id);
+                  }}
+                  title="静音"
+                >
+                  默
+                </button>
+              </span>
             </div>
-          ))}
+            );
+          })}
           <div className="hint">
             <p>
               <b>录入</b>：字母落字（见设置键位表）；数字 1/2/4/6/8 = 整/半/¼/附点/附点半
             </p>
             <p>0=休止 T=连线 E=滚 R=闷 Y=双打 Backspace=清除</p>
             <p>←→ 移格 ↑↓ 换乐器 Space 播放 +/− 调速</p>
+            <p>
+              <b>音色</b>：在设置页改基频/衰减；「套」=本曲这件乐器套用当前音色，不套则保留本曲自己的。
+            </p>
             <p>
               当前时值：<b data-testid="cur-duration">{durationLabel}</b>
             </p>

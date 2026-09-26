@@ -30,6 +30,7 @@
 - 段落循环：从选中处起循环 4 小节，循环间无相位漂移。
 - 拍号 2/4、3/4、4/4 切换；`+4 小节` / `−末小节` 增删小节。
 - 键位重绑：设置页点「改」后按新键，同一键只映射一个字，改动写入 IndexedDB。
+- 乐器音色调整：设置页可改每件乐器的基频/衰减，按乐器允许范围就地校验（字母/负数/超范围即时红字提示且不写入，失焦回退到已存值），改动立即存入 IndexedDB；之后新建空白谱与曲牌载入的曲目携带当前音色，已存在的曲目保留各自快照，需在编辑器里按乐器逐条（或全部）点「套用当前音色」才更新；每件乐器可单独恢复出厂，也可一键全部恢复（`src/lib/synth.ts`、`src/pages/Settings.tsx`、`src/pages/Editor.tsx`）。
 - 散板（`freeMeter`）标记与每小节 `tempoNote` 文字标记（数据模型与谱面显示支持，暂无 UI 入口）。
 - 简谱对照行、PNG 导出。
 
@@ -41,7 +42,7 @@
 #/score/:id           编辑器：顶栏（标题/流派/拍号/散板/±小节/出谱打印）+ 左乐器面板 + 中时值条与 SVG 谱面 + 下试听控制台
 #/score/:id/print     打印视图：A4 横向、简谱对照开关、打印/导出 PDF、导出 PNG（不套顶部导航）
 #/library             曲牌库：6 张骨架卡（载入并编辑）+ 拟音字表（音色/基频/衰减）
-#/settings            设置：试听（高亮开关、散板伸缩）、键盘映射、乐器音色表
+#/settings            设置：试听（高亮开关、散板伸缩）、键盘映射、乐器音色表（基频/衰减，范围校验、恢复出厂）
 ```
 
 ## 7. 数据模型
@@ -60,7 +61,8 @@ type Score = { id: string; title: string; style?: string; bpm: number; bars: Bar
 
 type KeyBinding  = { key: string; instrumentId: string; glyphIndex: number };
 type AppSettings = { keyMap: KeyBinding[]; durationKeys: Record<string, number>;
-                     showHighlight: boolean; currentBeatStretch: number };
+                     showHighlight: boolean; currentBeatStretch: number;
+                     synthOverrides: Record<string, Partial<Pick<Synth, 'baseHz' | 'decay'>>> };
 type ScheduleEvent = { time: number; barIndex: number; offset: number; instrumentId: string;
                        hit: Hit; glyph: string; durationTicks: number };
 
@@ -76,6 +78,7 @@ IndexedDB 库名 `app023-percussion`，对象仓 `scores`（keyPath `id`，索�
 - **事件展开与调度**：`tickSeconds(bpm) = 60 / bpm / 4`；`computeEvents` 把谱面展开为 `time = startTime + 绝对格 × 每格秒数`，每击独立重算、无累加变量，因此没有累积漂移；`computeLoopEvents` 按段落跨度平移重复。`scheduleEvents` 用 `setInterval(25ms)` 只向 0.12s 窗口填事件，发声时刻交给 `AudioContext` 时间轴精确执行（`src/lib/audio.ts`）。
 - **播放前先 `ctx.resume()`**：suspended 状态下 `currentTime` 冻结，排程会挤在 0 附近，所以 `useAudio.play` 先 resume 再排（`src/hooks/useAudio.ts`）。
 - **合成音三配方**：鼓 = 低频正弦下滑 + 短噪声；锣/钹 = 带通噪声 + 1 / 1.47 / 2.13 倍三个失谐三角波泛音；木 = 高通噪声 + 三角波 blip；闷击把衰减压到 0.3 倍，双打延后 30ms 补一击，滚奏按 55ms 间隔补击（`src/lib/audio.ts`）。
+- **音色覆盖与套用**：设置只存「乐器 id → baseHz/decay 覆盖项」（`synthOverrides`），`currentInstruments` 把出厂乐器与覆盖合并后交给 `newEmptyScore`/`scoreFromPattern`，曲目持有独立深拷贝快照（改设置不回改旧曲）；旧曲在编辑器经 `applyCurrentSynth(score, overrides, ids?)` 选择性套用，只搬 baseHz/decay；输入经 `parseSynthInput` 按 `synthLimit` 的乐器范围校验，非法不落盘（`src/lib/synth.ts`）。
 - **曲牌骨架转换**：`[拟音字数组, 格数][]` 逐条落格，跨小节自动切成「前段 tie 连打 + 后段转空步」，末尾不足补 `rest`，条目用未知拟音字则抛错（`src/lib/factory.ts`）。
 - **谱面布局**：小节按 `barsPerRow` 分行，一行系统高 = 小节号 16 + 乐器数 × 行高 + 14 + 简谱行高；时值线长度 = `beats × pxPerTick`，`tieLine` 向后合并连续 tie 的宽度（`src/components/ScoreGrid.tsx`、`src/lib/grid.ts`）。
 - **打印字号自适应**：按 A4 横排内容宽 1047px、目标每行最多 16 小节反算 `pxPerTick`，夹在 6–14 之间（`src/pages/Print.tsx`）。
@@ -90,12 +93,12 @@ IndexedDB 库名 `app023-percussion`，对象仓 `scores`（keyPath `id`，索�
 - 窄屏（≤760px）编辑区改为纵向，乐器面板横向滚动，隐藏面板标题与提示。
 
 ## 10. 验收标准
-- 单元测试 58 例全绿：`tests/grid.test.ts` 26 例、`tests/glyphs.test.ts` 18 例、`tests/scheduler.test.ts` 9 例、`tests/storage.test.ts` 5 例。
+- 单元测试 77 例全绿：`tests/grid.test.ts` 26 例、`tests/glyphs.test.ts` 18 例、`tests/scheduler.test.ts` 9 例、`tests/storage.test.ts` 5 例、`tests/synth.test.ts` 19 例。
 - 时值换算：整拍 4 / 半拍 2 / ¼ 拍 1 / 附点 6 / 附点半拍 3；4/4 = 16 格、2/4 = 8 格、3/4 = 12 格；不满小节被校验判为错误。
 - 调度精度：BPM 120 连续 240 拍，每击时刻与「整数格 × 固定每格秒数」的独立重算结果完全一致，相邻间隔偏差 < 1e-9s（验收线 10ms），末击无累积漂移。
 - 齐奏：同一步内鼓、大锣、钹三击的时间集合大小 = 1，完全同刻而非近似。
 - 曲牌健壮性：6 个内置骨架经 `scoreFromPattern` 转换后 `validateScore` 与 `validateHitGlyphs` 均返回空数组。
-- E2E 13 例：建谱 → 录入 → 齐奏同列（三字中心 x 差 < 1px）→ 播放高亮 → BPM 加减 → 刷新不丢 → 打印视图 4 小节一行且 SVG 宽度 ≤ 1047+64+2 → 改键位后刷新仍生效 → 100 小节谱面滚动 ≥ 50fps。
+- E2E 16 例：建谱 → 录入 → 齐奏同列（三字中心 x 差 < 1px）→ 播放高亮 → BPM 加减 → 刷新不丢 → 打印视图 4 小节一行且 SVG 宽度 ≤ 1047+64+2 → 改键位后刷新仍生效 → 改基频/衰减落盘且刷新保留、新曲携带、旧曲不被动 → 字母/负数/超范围就地提示且不写入 → 旧曲逐条/全部套用与单件/全部恢复出厂 → 100 小节谱面滚动 ≥ 50fps。
 - Docker 容器内 `curl http://localhost:8103/healthz` 返回 200 与文本 `ok`。
 
 ## 11. 边界（刻意不做）
@@ -108,9 +111,8 @@ IndexedDB 库名 `app023-percussion`，对象仓 `scores`（keyPath `id`，索�
 3. 播放高亮列定位有误：`position.tick` 存的是小节绝对起始格（`src/hooks/useAudio.ts:77-79`），`ScoreGrid` 又把它当小节内偏移使用（`src/components/ScoreGrid.tsx:276`），高亮固定落在小节首拍处，与 README §4.3「不会与声音错位」不符。
 4. 散板「不画严格拍格」未实现：`ScoreGrid` 不读取 `freeMeter`，始终按每拍 4 格画拍线与格线（`src/components/ScoreGrid.tsx:247-262`，README §4.4）。
 5. 谱面校验函数未接入界面：`validateScore`（`src/lib/grid.ts:148`）与 `validateHitGlyphs`（`src/lib/glyphs.ts:59`）在 `src/` 内无调用方，只有测试引用，README §4.1「`isBarFull` 随处校验」、§4.2「谱面数据校验」在 UI 上无触发点。
-6. 设置页「乐器音色」改动无效果：`patchSynth` 只改组件内 `useState`（`src/pages/Settings.tsx:42-46`、`:117-146`），既不写 IndexedDB 也不回写曲目，README §5.4 所称「设置页直接改（仅本浏览器生效）」在这份代码里是无效操作。
-7. 交互元素不全是真实控件：乐器行是可点击 `<div>`（`src/pages/Editor.tsx:353-359`）、谱面落字热区是 SVG `<rect>`（`src/components/ScoreGrid.tsx:299-312`），与 README §7「交互元素用真实 `<button>`/`<input>`」有出入。
-8. 其余：`changeBeatsPerBar` 末尾 `freeMeter: bpb === 0 ? s.freeMeter : s.freeMeter` 是恒等写法（`src/pages/Editor.tsx:279`，死代码，不影响行为），且改拍号按格偏移搬运 hits，小节变短会丢弃超出的击点；`velocity` 只有类型与渲染、没有编辑入口（`resolveKey` 固定为 2，`src/lib/glyphs.ts:46`）；README 首段指向的仓库根 `README.md`（`../../README.md`）在本批次目录中不存在。
+6. 交互元素不全是真实控件：乐器行是可点击 `<div>`（`src/pages/Editor.tsx:353-359`）、谱面落字热区是 SVG `<rect>`（`src/components/ScoreGrid.tsx:299-312`），与 README §7「交互元素用真实 `<button>`/`<input>`」有出入。
+7. 其余：`changeBeatsPerBar` 末尾 `freeMeter: bpb === 0 ? s.freeMeter : s.freeMeter` 是恒等写法（`src/pages/Editor.tsx:279`，死代码，不影响行为），且改拍号按格偏移搬运 hits，小节变短会丢弃超出的击点；`velocity` 只有类型与渲染、没有编辑入口（`resolveKey` 固定为 2，`src/lib/glyphs.ts:46`）；README 首段指向的仓库根 `README.md`（`../../README.md`）在本批次目录中不存在。
 
 ## 12. 容器化与构建（Docker）
 

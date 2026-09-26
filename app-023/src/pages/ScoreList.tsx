@@ -3,8 +3,11 @@ import { useEffect, useState } from 'react';
 import type { Score } from '../types';
 import { deleteScore, listScores, saveScore } from '../lib/storage';
 import { newEmptyScore, PATTERNS } from '../lib/factory';
+import { currentInstruments } from '../lib/synth';
+import { useSettings } from '../settingsContext';
 
 export function ScoreList() {
+  const { s: settings } = useSettings();
   const [scores, setScores] = useState<Score[]>([]);
   const [title, setTitle] = useState('');
   const [bpb, setBpb] = useState(4);
@@ -16,7 +19,8 @@ export function ScoreList() {
   }, []);
 
   const create = async () => {
-    const s = newEmptyScore(title.trim() || '未命名锣鼓段', bpb, 4);
+    // 新曲携带当前设置音色（出厂值 + 用户覆盖的基频/衰减）
+    const s = newEmptyScore(title.trim() || '未命名锣鼓段', bpb, 4, currentInstruments(settings.synthOverrides));
     if (free) s.freeMeter = true;
     await saveScore(s);
     setTitle('');

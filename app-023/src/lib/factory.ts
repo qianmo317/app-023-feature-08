@@ -14,6 +14,7 @@ export function defaultSettings(): AppSettings {
     durationKeys: instrumentsData.durationKeys,
     showHighlight: true,
     currentBeatStretch: 1,
+    synthOverrides: {}, // 乐器音色改动（基频/衰减），新曲携带；空 = 全用出厂值
   };
 }
 
@@ -47,6 +48,7 @@ function stepFromGlyphs(glyphs: string[], ticks: number, instruments: Instrument
 
 /** 曲牌骨架 → 完整 Score（一键载入再改）。跨小节条目自动切分（tie 连打），末尾补休止。 */
 export function scoreFromPattern(p: PatternDef, instruments: Instrument[] = DEFAULT_INSTRUMENTS): Score {
+  instruments = instruments.map((i) => structuredClone(i)); // 曲目持有独立快照，不共享内置数组
   const barT = barTicks(p.beatsPerBar);
   const bars: Bar[] = [{ index: 0, beatsPerBar: p.beatsPerBar, steps: [] }];
   let acc = 0;
@@ -93,7 +95,7 @@ export function newEmptyScore(title: string, beatsPerBar = 4, barCount = 4, inst
     title: title || '未命名锣鼓段',
     bpm: 100,
     bars,
-    instruments,
+    instruments: instruments.map((i) => structuredClone(i)), // 独立快照，设置后改不影响已存曲目
     freeMeter: false,
     updatedAt: Date.now(),
   };

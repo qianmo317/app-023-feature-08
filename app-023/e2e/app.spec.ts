@@ -1,6 +1,45 @@
 // E2E —— 模拟真实用户点击：建谱 → 录入 → 试听 → 调速 → 持久化 → 打印 → 性能
 import { expect, test, type Page } from '@playwright/test';
 
+/** 读 IndexedDB 里的应用设置（音色覆盖等） */
+async function readSettings(page: Page): Promise<Record<string, unknown>> {
+  return page.evaluate(
+    () =>
+      new Promise((resolve, reject) => {
+        const req = indexedDB.open('app023-percussion');
+        req.onsuccess = () => {
+          const db = req.result;
+          const tx = db.transaction('settings', 'readonly');
+          tx.objectStore('settings').get('app').onsuccess = function (this: IDBRequest) {
+            resolve((this.result ?? {}) as Record<string, unknown>);
+            db.close();
+          };
+        };
+        req.onerror = () => reject(req.error);
+      }),
+  );
+}
+
+/** 读 IndexedDB 里某曲目 */
+async function readScore(page: Page, id: string): Promise<Record<string, unknown>> {
+  return page.evaluate(
+    (sid) =>
+      new Promise((resolve, reject) => {
+        const req = indexedDB.open('app023-percussion');
+        req.onsuccess = () => {
+          const db = req.result;
+          const tx = db.transaction('scores', 'readonly');
+          tx.objectStore('scores').get(sid).onsuccess = function (this: IDBRequest) {
+            resolve((this.result ?? {}) as Record<string, unknown>);
+            db.close();
+          };
+        };
+        req.onerror = () => reject(req.error);
+      }),
+    id,
+  );
+}
+
 async function createEmptyScore(page: Page, title: string) {
   await page.goto('#/');
   await page.getByTestId('new-title').fill(title);
@@ -203,6 +242,124 @@ test.describe('设置', () => {
     await page.reload();
     const row = page.locator('tr', { hasText: '咚' });
     await expect(row).toContainText('p');
+  });
+
+  test('改基频/衰减：落盘、刷新保留、新曲携带、旧曲不被动', async ({ page }) => {
+    // 先建一支旧曲（出厂音色）
+    await createEmptyScore(page, 'E2E 旧曲音色');
+    const oldId = page.url().split('/score/')[1];
+
+    // 设置页改鼓的基频与衰减（鼓范围 30–200Hz / 0.05–1.5s）
+    await page.goto('#/settings');
+    await page.getByTestId('baseHz-gu').fill('150');
+    await page.getByTestId('decay-gu').fill('0.66');
+    await expect(page.getByTestId('custom-gu')).toBeVisible();
+    await page.waitForTimeout(300);
+    let settings = await readSettings(page);
+    expect(settings.synthOverrides).toEqual({ gu: { baseHz: 150, decay: 0.66 } });
+
+    // 刷新后仍是改过的值
+    await page.reload();
+    await expect(page.getByTestId('baseHz-gu')).toHaveValue('150');
+    await expect(page.getByTestId('decay-gu')).toHaveValue('0.66');
+
+    // 旧曲保持出厂音色（未套用不动）
+    const oldScore = (await readScore(page, oldId)) as {
+      instruments: { id: string; synth: { baseHz: number; decay: number } }[];
+    };
+    const oldGu = oldScore.instruments.find((i) => i.id === 'gu')!;
+    expect(oldGu.synth.baseHz).not.toBe(150);
+    expect(oldGu.synth.decay).not.toBe(0.66);
+
+    // 新曲携带改过的音色
+    await page.goto('#/');
+    await page.getByTestId('new-title').fill('E2E 新曲音色');
+    await page.getByTestId('btn-create').click();
+    await expect(page.getByTestId('editor-page')).toBeVisible();
+    const newId = page.url().split('/score/')[1];
+    await page.waitForTimeout(600); // 等自动保存
+    const newScore = (await readScore(page, newId)) as {
+      instruments: { id: string; synth: { baseHz: number; decay: number } }[];
+    };
+    const newGu = newScore.instruments.find((i) => i.id === 'gu')!;
+    expect(newGu.synth.baseHz).toBe(150);
+    expect(newGu.synth.decay).toBe(0.66);
+  });
+
+  test('非法输入（字母/负数/超范围）就地提示且不写入', async ({ page }) => {
+    await page.goto('#/settings');
+    const hz = page.getByTestId('baseHz-gu');
+
+    await hz.fill('abc');
+    await expect(page.getByTestId('baseHz-gu-error')).toContainText('数字');
+    await page.keyboard.press('Tab'); // 失焦：非法值回退
+    await expect(hz).toHaveValue('82'); // 出厂值
+
+    await hz.fill('-50');
+    await expect(page.getByTestId('baseHz-gu-error')).toContainText('大于 0');
+    await page.keyboard.press('Tab');
+    await expect(hz).toHaveValue('82');
+
+    await hz.fill('999'); // 鼓上限 200
+    await expect(page.getByTestId('baseHz-gu-error')).toContainText('允许范围');
+    await page.keyboard.press('Tab');
+    await expect(hz).toHaveValue('82');
+
+    await page.waitForTimeout(200);
+    const settings = await readSettings(page);
+    expect(settings.synthOverrides ?? {}).toEqual({}); // 全程没写入
+  });
+
+  test('旧曲逐条套用 / 全部套用 / 恢复出厂', async ({ page }) => {
+    await createEmptyScore(page, 'E2E 套用音色');
+    const id = page.url().split('/score/')[1];
+
+    // 出厂音色下，编辑器套用按钮不可用
+    await expect(page.getByTestId('apply-synth-gu')).toBeDisabled();
+    await expect(page.getByTestId('apply-synth-all')).toBeDisabled();
+
+    // 改两件乐器
+    await page.goto('#/settings');
+    await page.getByTestId('baseHz-gu').fill('132');
+    await page.getByTestId('baseHz-daluo').fill('300');
+    await page.waitForTimeout(300);
+
+    // 回旧曲：逐条只套鼓，大锣保留自己的
+    await page.goto(`#/score/${id}`);
+    await expect(page.getByTestId('apply-synth-gu')).toBeEnabled();
+    await expect(page.getByTestId('apply-synth-daluo')).toBeEnabled();
+    await page.getByTestId('apply-synth-gu').click();
+    await expect(page.getByTestId('apply-synth-gu')).toBeDisabled();
+    await expect(page.getByTestId('apply-synth-daluo')).toBeEnabled(); // 大锣仍未套
+    await page.waitForTimeout(600);
+    let score = (await readScore(page, id)) as {
+      instruments: { id: string; synth: { baseHz: number } }[];
+    };
+    expect(score.instruments.find((i) => i.id === 'gu')!.synth.baseHz).toBe(132);
+    expect(score.instruments.find((i) => i.id === 'daluo')!.synth.baseHz).not.toBe(300);
+
+    // 全部套用：大锣也更新
+    await page.getByTestId('apply-synth-all').click();
+    await expect(page.getByTestId('apply-synth-daluo')).toBeDisabled();
+    await page.waitForTimeout(600);
+    score = (await readScore(page, id)) as { instruments: { id: string; synth: { baseHz: number } }[] };
+    expect(score.instruments.find((i) => i.id === 'daluo')!.synth.baseHz).toBe(300);
+
+    // 单件恢复出厂：鼓的覆盖清掉，鼓行恢复按钮变灰；已套用到旧曲的值不回改
+    await page.goto('#/settings');
+    await expect(page.getByTestId('reset-synth-gu')).toBeEnabled();
+    await page.getByTestId('reset-synth-gu').click();
+    await expect(page.getByTestId('reset-synth-gu')).toBeDisabled();
+    await expect(page.getByTestId('baseHz-gu')).toHaveValue('82');
+    await expect(page.getByTestId('custom-gu')).toHaveCount(0);
+
+    // 全部恢复：清空剩余覆盖（大锣）
+    await expect(page.getByTestId('reset-all-synth')).toBeEnabled();
+    await page.getByTestId('reset-all-synth').click();
+    await expect(page.getByTestId('reset-all-synth')).toBeDisabled();
+    await expect(page.getByTestId('baseHz-daluo')).toHaveValue('196');
+    const settings = await readSettings(page);
+    expect(settings.synthOverrides ?? {}).toEqual({});
   });
 });
 

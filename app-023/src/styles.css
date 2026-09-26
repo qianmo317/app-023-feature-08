@@ -69,13 +69,21 @@ h2 { font-size: 16px; margin: 18px 0 6px; border-left: 3px solid var(--red); pad
   width: 230px; background: var(--panel); border-right: 1px solid var(--border);
   padding: 10px; overflow-y: auto; flex-shrink: 0;
 }
-.inst-panel h3 { margin: 2px 0 8px; font-size: 14px; color: var(--dim); }
+.inst-panel h3 { margin: 2px 0 8px; font-size: 14px; color: var(--dim); display: flex; align-items: center; }
 .inst-row {
   display: flex; align-items: center; gap: 6px; padding: 6px 8px; margin-bottom: 4px;
   background: #fff; border: 1px solid var(--border); border-radius: 4px; cursor: pointer;
+  flex-wrap: wrap; row-gap: 4px;
 }
 .inst-row.sel { border-color: var(--red); box-shadow: 0 0 0 1px var(--red) inset; }
-.inst-name { font-weight: 700; width: 34px; }
+.inst-name { font-weight: 700; width: 34px; flex-shrink: 0; }
+.glyphs { flex: 1; min-width: 0; }
+.inst-actions { display: flex; align-items: center; flex-shrink: 0; }
+.inst-actions .mini { margin-left: 3px; }
+.mini.synth-apply { border-color: var(--red); color: var(--red); font-weight: 700; }
+.mini:disabled { opacity: 0.4; cursor: default; }
+.synth-apply-all { margin-left: 8px; font-weight: 500; }
+.synth-apply-all:disabled { opacity: 0.4; cursor: default; }
 .glyph-chip {
   display: inline-block; border: 1px solid var(--border); border-radius: 3px;
   padding: 0 4px; margin-right: 3px; background: #fffdf7; font-size: 14px;
@@ -132,6 +140,17 @@ h2 { font-size: 16px; margin: 18px 0 6px; border-left: 3px solid var(--red); pad
 kbd { background: #fff; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 1px 7px; font-size: 13px; }
 tr.waiting { background: #fff3cd; }
 input[type='number'] { width: 76px; border: 1px solid var(--border); border-radius: 3px; padding: 3px 6px; }
+
+/* 音色表：文本输入（需自己拦住字母/负数）+ 就地错误提示 */
+.synth-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.synth-input { width: 86px; border: 1px solid var(--border); border-radius: 3px; padding: 3px 6px; font-size: 14px; }
+.synth-input.invalid { border-color: var(--red); background: #fff3f1; }
+.synth-error { color: var(--red); font-size: 12px; white-space: nowrap; }
+.synth-actions-col { min-width: 120px; }
+.custom-badge {
+  display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 3px;
+  background: #fdf0d5; color: #8a5a00; border: 1px solid #e3c27a; font-size: 11px; font-weight: 500;
+}
 
 /* ---- 手机横屏 ---- */
 @media (max-width: 760px) {
