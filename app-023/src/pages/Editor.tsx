@@ -5,7 +5,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { TICKS_PER_BEAT, type Hit, type Score, type Step, type Tech } from '../types';
 import { barTicks, setStepAt, stepAtOffset } from '../lib/grid';
 import { resolveKey, TECH_NAMES } from '../lib/glyphs';
-import { emptyBar } from '../lib/factory';
+import { emptyBar, applySynthsToScore } from '../lib/factory';
 import { getScore, saveScore } from '../lib/storage';
 import { useAudio } from '../hooks/useAudio';
 import { ScoreGrid, type Selection } from '../components/ScoreGrid';
@@ -338,6 +338,14 @@ export function Editor({ scoreId, onNavigate }: Props) {
         </button>
         <button className="btn" onClick={removeLastBar}>
           −末小节
+        </button>
+        <button
+          className="btn"
+          data-testid="btn-apply-synths"
+          title="把设置页当前的基频/衰减套用到本曲"
+          onClick={() => patch((sc) => applySynthsToScore(sc, settings))}
+        >
+          套用当前音色
         </button>
         <button className="btn" data-testid="btn-print" onClick={() => onNavigate(`#/score/${score.id}/print`)}>
           出谱打印

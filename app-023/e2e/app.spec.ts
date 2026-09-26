@@ -1,6 +1,33 @@
 // E2E —— 模拟真实用户点击：建谱 → 录入 → 试听 → 调速 → 持久化 → 打印 → 性能
 import { expect, test, type Page } from '@playwright/test';
 
+/** 直接从 IndexedDB 读曲目内嵌乐器音色 */
+async function readScoreSynth(
+  page: Page,
+  id: string,
+  instId: string,
+): Promise<{ baseHz: number; decay: number }> {
+  return page.evaluate(
+    async ({ sid, iid }): Promise<{ baseHz: number; decay: number }> => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const r = indexedDB.open('app023-percussion');
+        r.onsuccess = () => resolve(r.result);
+        r.onerror = () => reject(r.error);
+      });
+      const score = await new Promise<unknown>((resolve, reject) => {
+        const tx = db.transaction('scores', 'readonly');
+        const req = tx.objectStore('scores').get(sid);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      db.close();
+      const s = score as { instruments: { id: string; synth: { baseHz: number; decay: number } }[] };
+      return s.instruments.find((i) => i.id === iid)!.synth;
+    },
+    { sid: id, iid: instId },
+  );
+}
+
 async function createEmptyScore(page: Page, title: string) {
   await page.goto('#/');
   await page.getByTestId('new-title').fill(title);
@@ -203,6 +230,109 @@ test.describe('设置', () => {
     await page.reload();
     const row = page.locator('tr', { hasText: '咚' });
     await expect(row).toContainText('p');
+  });
+
+  test('乐器音色：合法值保存并在刷新后保留', async ({ page }) => {
+    await page.goto('#/settings');
+    await page.getByTestId('baseHz-gu').fill('104');
+    await page.getByTestId('decay-gu').fill('0.33');
+    await expect(page.getByTestId('baseHz-gu')).toHaveValue('104');
+    await expect(page.getByTestId('custom-flag-gu')).toBeVisible();
+    await page.waitForTimeout(300); // 等 IndexedDB 落盘
+    await page.reload();
+    await expect(page.getByTestId('baseHz-gu')).toHaveValue('104');
+    await expect(page.getByTestId('decay-gu')).toHaveValue('0.33');
+  });
+
+  test('乐器音色：字母/负数/超范围就地拦截且不写入，失焦回退', async ({ page }) => {
+    await page.goto('#/settings');
+    const hz = page.getByTestId('baseHz-gu');
+    const decay = page.getByTestId('decay-gu');
+    // 字母：就地提示，不写入（设置内存里仍为出厂值）
+    await hz.fill('abc');
+    await expect(page.getByTestId('baseHz-gu-err')).toBeVisible();
+    await hz.blur();
+    await expect(hz).toHaveValue('82'); // 出厂值回退
+    // 负数
+    await hz.fill('-5');
+    await expect(page.getByTestId('baseHz-gu-err')).toBeVisible();
+    await hz.blur();
+    await expect(hz).toHaveValue('82');
+    // 超范围（>2400）
+    await hz.fill('9999');
+    await expect(page.getByTestId('baseHz-gu-err')).toBeVisible();
+    await hz.blur();
+    await expect(hz).toHaveValue('82');
+    // 衰减超下限
+    await decay.fill('0.01');
+    await expect(page.getByTestId('decay-gu-err')).toBeVisible();
+    await decay.blur();
+    await expect(decay).toHaveValue('0.22');
+    await page.waitForTimeout(300);
+    await page.reload();
+    await expect(hz).toHaveValue('82'); // 非法值从未写入
+    await expect(decay).toHaveValue('0.22');
+  });
+
+  test('乐器音色：恢复内置把该乐器还原成出厂值', async ({ page }) => {
+    await page.goto('#/settings');
+    await page.getByTestId('baseHz-gu').fill('104');
+    await page.getByTestId('decay-gu').fill('0.33');
+    await expect(page.getByTestId('custom-flag-gu')).toBeVisible();
+    await page.getByTestId('reset-synth-gu').click();
+    await expect(page.getByTestId('baseHz-gu')).toHaveValue('82');
+    await expect(page.getByTestId('decay-gu')).toHaveValue('0.22');
+    await expect(page.getByTestId('custom-flag-gu')).toHaveCount(0);
+    await page.waitForTimeout(300);
+    await page.reload();
+    await expect(page.getByTestId('baseHz-gu')).toHaveValue('82');
+    await expect(page.getByTestId('decay-gu')).toHaveValue('0.22');
+  });
+});
+
+test.describe('音色与曲目', () => {
+  test('新建曲目携带设置页当前音色', async ({ page }) => {
+    await page.goto('#/settings');
+    await page.getByTestId('baseHz-gu').fill('104');
+    await page.getByTestId('decay-gu').fill('0.33');
+    await page.waitForTimeout(300); // 等设置落盘
+    // 新建空白谱：曲目内嵌的鼓音色 = 设置页当前值
+    await createEmptyScore(page, 'E2E 音色新曲');
+    const newId = (await page.evaluate(() => window.location.hash.replace(/^#\/score\//, ''))) as string;
+    const gu = await readScoreSynth(page, newId, 'gu');
+    expect(gu.baseHz).toBe(104);
+    expect(gu.decay).toBeCloseTo(0.33, 5);
+  });
+
+  test('已有曲目保留原音色，可逐条/整曲套用当前音色并持久化', async ({ page }) => {
+    // 先建一首曲目（此时鼓为出厂 82Hz / 0.22s）
+    await createEmptyScore(page, 'E2E 旧音色曲目');
+    const id = (await page.evaluate(() => window.location.hash.replace(/^#\/score\//, ''))) as string;
+    const readGu = () => readScoreSynth(page, id, 'gu');
+    expect((await readGu()).baseHz).toBe(82);
+
+    // 在设置页改音色后，旧曲目不被自动改动（保留自身音色）
+    await page.goto('#/settings');
+    await page.getByTestId('baseHz-gu').fill('104');
+    await page.getByTestId('decay-gu').fill('0.33');
+    await page.waitForTimeout(300);
+    expect((await readGu()).baseHz).toBe(82);
+
+    // 编辑器内整曲一键套用，立即写谱并持久化
+    await page.goto(`#/score/${id}`);
+    await expect(page.getByTestId('editor-page')).toBeVisible();
+    await page.getByTestId('btn-apply-synths').click();
+    await page.waitForTimeout(600); // 等自动保存
+    expect((await readGu()).baseHz).toBe(104);
+
+    // 曲目列表逐条套用入口同样生效
+    await page.goto('#/settings');
+    await page.getByTestId('baseHz-gu').fill('120');
+    await page.waitForTimeout(300);
+    await page.goto('#/');
+    await page.getByTestId(`apply-synths-${id}`).click();
+    await expect(page.getByTestId('apply-toast')).toBeVisible();
+    expect((await readGu()).baseHz).toBe(120);
   });
 });
 

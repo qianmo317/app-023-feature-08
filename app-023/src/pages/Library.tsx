@@ -1,13 +1,16 @@
 // 曲牌骨架库与拟音字表 /library
-import { DEFAULT_INSTRUMENTS, PATTERNS, scoreFromPattern } from '../lib/factory';
+import { PATTERNS, currentInstruments, scoreFromPattern } from '../lib/factory';
 import { saveScore } from '../lib/storage';
 import { TECH_NAMES } from '../lib/glyphs';
+import { useSettings } from '../settingsContext';
 
 export function Library() {
+  const { s } = useSettings();
   const load = async (pid: string) => {
     const p = PATTERNS.find((x) => x.id === pid);
     if (!p) return;
-    const score = scoreFromPattern(p);
+    // 新载入曲目携带设置页当前音色
+    const score = scoreFromPattern(p, currentInstruments(s));
     await saveScore(score);
     window.location.hash = `#/score/${score.id}`;
   };
@@ -43,7 +46,7 @@ export function Library() {
           </tr>
         </thead>
         <tbody>
-          {DEFAULT_INSTRUMENTS.map((inst) => (
+          {currentInstruments(s).map((inst) => (
             <tr key={inst.id}>
               <td style={{ color: inst.color, fontWeight: 700 }}>{inst.name}</td>
               <td>

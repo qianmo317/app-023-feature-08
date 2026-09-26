@@ -133,6 +133,16 @@ kbd { background: #fff; border: 1px solid var(--border); border-bottom-width: 2p
 tr.waiting { background: #fff3cd; }
 input[type='number'] { width: 76px; border: 1px solid var(--border); border-radius: 3px; padding: 3px 6px; }
 
+/* ---- 设置页乐器音色 ---- */
+.synth-field { display: inline-flex; align-items: center; gap: 8px; }
+.synth-field input { width: 76px; border: 1px solid var(--border); border-radius: 3px; padding: 3px 6px; }
+.synth-field input.invalid { border-color: var(--red); background: #fff4f2; }
+.field-err { color: var(--red); font-size: 12px; white-space: nowrap; }
+.toast { color: #2f6f3f; font-size: 13px; margin: 6px 0; }
+.row-link { margin-left: 8px; color: var(--dim); font-size: 13px; text-decoration: none; }
+.row-link:hover { color: var(--red); }
+.mini:disabled { opacity: 0.45; cursor: default; }
+
 /* ---- 手机横屏 ---- */
 @media (max-width: 760px) {
   .editor-body { flex-direction: column; }

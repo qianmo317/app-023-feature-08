@@ -2,13 +2,16 @@
 import { useEffect, useState } from 'react';
 import type { Score } from '../types';
 import { deleteScore, listScores, saveScore } from '../lib/storage';
-import { newEmptyScore, PATTERNS } from '../lib/factory';
+import { applySynthsToScore, currentInstruments, newEmptyScore, PATTERNS } from '../lib/factory';
+import { useSettings } from '../settingsContext';
 
 export function ScoreList() {
+  const { s } = useSettings();
   const [scores, setScores] = useState<Score[]>([]);
   const [title, setTitle] = useState('');
   const [bpb, setBpb] = useState(4);
   const [free, setFree] = useState(false);
+  const [toast, setToast] = useState('');
 
   const refresh = () => listScores().then(setScores);
   useEffect(() => {
@@ -16,11 +19,20 @@ export function ScoreList() {
   }, []);
 
   const create = async () => {
-    const s = newEmptyScore(title.trim() || '未命名锣鼓段', bpb, 4);
-    if (free) s.freeMeter = true;
-    await saveScore(s);
+    // 新曲携带设置页当前音色（未改过的乐器仍是出厂值）
+    const score = newEmptyScore(title.trim() || '未命名锣鼓段', bpb, 4, currentInstruments(s));
+    if (free) score.freeMeter = true;
+    await saveScore(score);
     setTitle('');
-    window.location.hash = `#/score/${s.id}`;
+    window.location.hash = `#/score/${score.id}`;
+  };
+
+  /** 已有曲目逐条套用当前音色；不套用则保留曲目自身音色 */
+  const applySynths = async (score: Score) => {
+    await saveScore(applySynthsToScore(score, s));
+    await refresh();
+    setToast(`「${score.title}」已套用当前音色`);
+    window.setTimeout(() => setToast(''), 2500);
   };
 
   return (
@@ -49,6 +61,12 @@ export function ScoreList() {
         </button>
       </div>
 
+      {toast && (
+        <p className="toast" data-testid="apply-toast">
+          {toast}
+        </p>
+      )}
+
       {scores.length === 0 ? (
         <p className="dim">还没有曲目。可新建空白谱，或从曲牌库载入「急急风」「四击头」等骨架再改。</p>
       ) : (
@@ -65,26 +83,36 @@ export function ScoreList() {
             </tr>
           </thead>
           <tbody>
-            {scores.map((s) => (
-              <tr key={s.id} data-testid={`score-row-${s.id}`}>
+            {scores.map((sc) => (
+              <tr key={sc.id} data-testid={`score-row-${sc.id}`}>
                 <td>
-                  <a href={`#/score/${s.id}`} className="score-link">
-                    {s.title}
+                  <a href={`#/score/${sc.id}`} className="score-link">
+                    {sc.title}
                   </a>
                 </td>
-                <td className="dim">{s.style ?? '—'}</td>
-                <td>{s.freeMeter ? '散板' : `${s.bars[0]?.beatsPerBar ?? 4}/4`}</td>
-                <td>{s.bars.length}</td>
-                <td>{s.bpm}</td>
-                <td className="dim">{new Date(s.updatedAt).toLocaleString('zh-CN')}</td>
+                <td className="dim">{sc.style ?? '—'}</td>
+                <td>{sc.freeMeter ? '散板' : `${sc.bars[0]?.beatsPerBar ?? 4}/4`}</td>
+                <td>{sc.bars.length}</td>
+                <td>{sc.bpm}</td>
+                <td className="dim">{new Date(sc.updatedAt).toLocaleString('zh-CN')}</td>
                 <td>
-                  <a href={`#/score/${s.id}/print`}>打印</a>
+                  <button
+                    className="mini"
+                    data-testid={`apply-synths-${sc.id}`}
+                    title="把设置页当前的基频/衰减套用到此曲"
+                    onClick={() => applySynths(sc)}
+                  >
+                    套用当前音色
+                  </button>
+                  <a className="row-link" href={`#/score/${sc.id}/print`}>
+                    打印
+                  </a>
                   <button
                     className="mini danger"
-                    data-testid={`del-${s.id}`}
+                    data-testid={`del-${sc.id}`}
                     onClick={async () => {
-                      if (confirm(`删除「${s.title}」？`)) {
-                        await deleteScore(s.id);
+                      if (confirm(`删除「${sc.title}」？`)) {
+                        await deleteScore(sc.id);
                         void refresh();
                       }
                     }}
@@ -98,7 +126,7 @@ export function ScoreList() {
         </table>
       )}
 
-      <p className="dim">内置曲牌：{PATTERNS.map((p) => p.name).join(' / ')}</p>
+      <p className="dim">已有曲目保留各自音色，可逐条「套用当前音色」；新曲目自动携带设置页当前音色。内置曲牌：{PATTERNS.map((p) => p.name).join(' / ')}</p>
     </div>
   );
 }

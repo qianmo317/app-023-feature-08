@@ -1,7 +1,7 @@
 // 工厂：默认数据 → 可编辑对象
 import instrumentsData from '../data/instruments.json';
 import patternsData from '../data/patterns.json';
-import { TICKS_PER_BEAT, type AppSettings, type Bar, type Instrument, type Score, type Step } from '../types';
+import { SYNTH_LIMITS, TICKS_PER_BEAT, type AppSettings, type Bar, type Instrument, type Score, type Step, type SynthSettings } from '../types';
 import { barTicks } from './grid';
 import { lookupGlyph } from './glyphs';
 import { newId } from './storage';
@@ -15,6 +15,53 @@ export function defaultSettings(): AppSettings {
     showHighlight: true,
     currentBeatStretch: 1,
   };
+}
+
+/**
+ * 解析设置页输入：空串/字母/负数/越界均视为非法，返回 null（就地提示且不写入）。
+ * 只接受落在 [min,max] 内的正数。
+ */
+export function parseSynthField(field: 'baseHz' | 'decay', raw: string): number | null {
+  const t = raw.trim();
+  if (t === '') return null;
+  if (!/^\d+(\.\d+)?$/.test(t)) return null; // 拦字母、负号、e/Infinity 等
+  const v = Number(t);
+  if (!Number.isFinite(v) || v <= 0) return null;
+  const { min, max } = SYNTH_LIMITS[field];
+  if (v < min || v > max) return null;
+  return v;
+}
+
+/** 丢弃越界/残缺的音色覆盖（读到旧数据或 IndexedDB 被手改时兜底） */
+export function sanitizeSynths(synths: SynthSettings | undefined): SynthSettings {
+  const out: SynthSettings = {};
+  if (!synths) return out;
+  for (const [id, v] of Object.entries(synths)) {
+    const hzOk = Number.isFinite(v.baseHz) && v.baseHz >= SYNTH_LIMITS.baseHz.min && v.baseHz <= SYNTH_LIMITS.baseHz.max;
+    const dOk = Number.isFinite(v.decay) && v.decay >= SYNTH_LIMITS.decay.min && v.decay <= SYNTH_LIMITS.decay.max;
+    if (hzOk && dOk) out[id] = { baseHz: v.baseHz, decay: v.decay };
+  }
+  return out;
+}
+
+/** 内置乐器套上设置页当前音色覆盖（新曲/曲牌载入时使用） */
+export function currentInstruments(settings: AppSettings): Instrument[] {
+  const synths = sanitizeSynths(settings.synths);
+  return DEFAULT_INSTRUMENTS.map((i) =>
+    synths[i.id] ? { ...i, synth: { ...i.synth, ...synths[i.id] } } : i,
+  );
+}
+
+/**
+ * 用当前设置音色改写已存在曲目：按乐器 id 逐条覆盖基频/衰减，保留曲目其余一切。
+ * 返回新对象（不就地修改）；当前设置里没有覆盖的乐器保留曲目自身音色。
+ */
+export function applySynthsToScore(score: Score, settings: AppSettings): Score {
+  const synths = sanitizeSynths(settings.synths);
+  const instruments = score.instruments.map((i) =>
+    synths[i.id] ? { ...i, synth: { ...i.synth, ...synths[i.id] } } : i,
+  );
+  return { ...score, instruments, updatedAt: Date.now() };
 }
 
 export interface PatternDef {

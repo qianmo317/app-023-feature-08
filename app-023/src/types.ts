@@ -10,6 +10,15 @@ export interface Synth {
   noise: boolean;
 }
 
+/** 可在设置页调整的合成参数（乐器音色覆盖表：乐器 id → 基频/衰减） */
+export type SynthSettings = Record<string, { baseHz: number; decay: number }>;
+
+/** 基频/衰减允许范围（设置页就地拦截的依据） */
+export const SYNTH_LIMITS = {
+  baseHz: { min: 40, max: 2400 },
+  decay: { min: 0.03, max: 3 },
+} as const;
+
 export interface Instrument {
   id: string;
   name: string;
@@ -64,6 +73,8 @@ export interface AppSettings {
   durationKeys: Record<string, number>; // 数字键 → 格数
   showHighlight: boolean; // 试听时当前拍高亮（可关闭）
   currentBeatStretch: number; // 散板近似播放伸缩系数
+  /** 乐器音色覆盖（基频/衰减）；缺省或已恢复内置的乐器不在表中 */
+  synths?: SynthSettings;
 }
 
 /** 一个待调度的事件（音频/视觉共用） */
